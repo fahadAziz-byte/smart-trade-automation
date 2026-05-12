@@ -1,35 +1,32 @@
 #property strict
-#property version   "1.00"
-#property description "RSI Strategy EA for XAUUSD H1"
+#property version   "1.10"
+#property description "RSI Strategy EA for XAUUSD"
 
 #include <Trade/Trade.mqh>
 
-input string         InpSymbol                = "XAUUSD";
-input ENUM_TIMEFRAMES InpTimeframe             = PERIOD_H1;
-input int            InpRSIPeriod             = 14;
-input double         InpRSIEntryLevel         = 30.0;
-input double         InpRSIExitLevel          = 70.0;
-input double         InpLots                  = 0.01;
-input int            InpStopLossPoints        = 1000;
-input int            InpTakeProfitPoints      = 10000;
-input int            InpMaxTradesPerDay       = 1;
-input ulong          InpMagicNumber            = 160702e; // invalid literal? corrected below
-
-// Correct magic number declaration
-input ulong          InpMagicNumberFixed       = 160702;
+input string          InpSymbol           = "XAUUSD";
+input ENUM_TIMEFRAMES InpTimeframe        = PERIOD_H1;
+input int             InpRSIPeriod        = 14;
+input double          InpRSIEntryLevel    = 30.0;
+input double          InpRSIExitLevel     = 70.0;
+input double          InpLots             = 0.01;
+input int             InpStopLossPoints   = 1000;   // 1000 points/pips as requested
+input int             InpTakeProfitPoints = 10000;  // 10000 points/pips as requested
+input int             InpMaxTradesPerDay  = 1;
+input ulong           InpMagicNumber      = 160702;
+input int             InpDeviationPoints  = 10;
 
 CTrade trade;
 
-int rsi_handle = INVALID_HANDLE;
+int      rsi_handle = INVALID_HANDLE;
 datetime last_bar_time = 0;
-int trades_today = 0;
-int day_of_year_cached = -1;
+int      trades_today = 0;
+int      day_of_year_cached = -1;
 
 string EA_SYMBOL;
 ENUM_TIMEFRAMES EA_TF;
 ulong EA_MAGIC;
 
-// Return current day of year
 int GetDayOfYear(datetime t)
 {
    MqlDateTime dt;
@@ -37,24 +34,6 @@ int GetDayOfYear(datetime t)
    return dt.day_of_year;
 }
 
-// Count open positions for this symbol/magic
-int CountOpenPositions()
-{
-   int count = 0;
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
-   {
-      if(PositionSelectByIndex(i))
-      {
-         string sym = PositionGetString(POSITION_SYMBOL);
-         long magic = PositionGetInteger(POSITION_MAGIC);
-         if(sym == EA_SYMBOL && (ulong)magic == EA_MAGIC)
-            count++;
-      }
-   }
-   return count;
-}
-
-// Check if we already traded today
 void UpdateDailyCounter()
 {
    datetime now = TimeCurrent();
@@ -66,19 +45,18 @@ void UpdateDailyCounter()
    }
 }
 
-// Get RSI value for the previous closed bar
-bool GetRSIValue(double &rsi_value)
+bool IsSymbolReady()
 {
-   double buffer[];
-   ArraySetAsSeries(buffer, true);
-   if(CopyBuffer(rsi_handle, 0, 1, 1, buffer) != 1)
+   if(!SymbolSelect(EA_SYMBOL, true))
       return false;
 
-   rsi_value = buffer[0];
-   return true;
+   long trade_mode = SYMBOL_TRADE_MODE_DISABLED;
+   if(!SymbolInfoInteger(EA_SYMBOL, SYMBOL_TRADE_MODE, trade_mode))
+      return false;
+
+   return (trade_mode != SYMBOL_TRADE_MODE_DISABLED);
 }
 
-// Detect new bar on selected timeframe
 bool IsNewBar()
 {
    datetime bar_time = iTime(EA_SYMBOL, EA_TF, 0);
@@ -90,20 +68,38 @@ bool IsNewBar()
    return false;
 }
 
-// Basic validation that symbol exists and is tradable
-bool IsSymbolReady()
+bool GetRSIValue(double &rsi_value)
 {
-   if(!SymbolSelect(EA_SYMBOL, true))
+   double buffer[];
+   ArraySetAsSeries(buffer, true);
+
+   if(CopyBuffer(rsi_handle, 0, 1, 1, buffer) != 1)
       return false;
 
-   long trade_mode = 0;
-   if(!SymbolInfoInteger(EA_SYMBOL, SYMBOL_TRADE_MODE, trade_mode))
-      return false;
-
-   return (trade_mode != SYMBOL_TRADE_MODE_DISABLED);
+   rsi_value = buffer[0];
+   return true;
 }
 
-// Open buy position
+int CountOpenPositions()
+{
+   int count = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+
+      if(PositionSelectByTicket(ticket))
+      {
+         string sym = PositionGetString(POSITION_SYMBOL);
+         long magic = PositionGetInteger(POSITION_MAGIC);
+         if(sym == EA_SYMBOL && (ulong)magic == EA_MAGIC)
+            count++;
+      }
+   }
+   return count;
+}
+
 bool OpenBuy()
 {
    double ask = 0.0;
@@ -122,17 +118,20 @@ bool OpenBuy()
       tp = NormalizeDouble(ask + InpTakeProfitPoints * point, digits);
 
    trade.SetExpertMagicNumber(EA_MAGIC);
-   trade.SetDeviationInPoints(10);
+   trade.SetDeviationInPoints(InpDeviationPoints);
 
-   return trade.Buy(InpLots, EA_SYMBOL, ask, sl, tp, "RSI Buy");
+   return trade.Buy(InpLots, EA_SYMBOL, 0.0, sl, tp, "RSI Buy");
 }
 
-// Close all buy positions for this EA symbol/magic
 void CloseBuyPositions()
 {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
-      if(PositionSelectByIndex(i))
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+
+      if(PositionSelectByTicket(ticket))
       {
          string sym = PositionGetString(POSITION_SYMBOL);
          long magic = PositionGetInteger(POSITION_MAGIC);
@@ -141,7 +140,7 @@ void CloseBuyPositions()
          if(sym == EA_SYMBOL && (ulong)magic == EA_MAGIC && type == POSITION_TYPE_BUY)
          {
             trade.SetExpertMagicNumber(EA_MAGIC);
-            trade.PositionClose(sym);
+            trade.PositionClose(ticket);
          }
       }
    }
@@ -151,7 +150,7 @@ int OnInit()
 {
    EA_SYMBOL = InpSymbol;
    EA_TF = InpTimeframe;
-   EA_MAGIC = InpMagicNumberFixed;
+   EA_MAGIC = InpMagicNumber;
 
    if(!IsSymbolReady())
       return INIT_FAILED;
@@ -165,7 +164,7 @@ int OnInit()
    trades_today = 0;
 
    trade.SetExpertMagicNumber(EA_MAGIC);
-   trade.SetDeviationInPoints(10);
+   trade.SetDeviationInPoints(InpDeviationPoints);
 
    return INIT_SUCCEEDED;
 }
@@ -193,11 +192,9 @@ void OnTick()
    if(!GetRSIValue(rsi))
       return;
 
-   // Exit logic: close buy positions when RSI is above exit threshold
    if(rsi > InpRSIExitLevel)
       CloseBuyPositions();
 
-   // Entry logic: open buy when RSI is below entry threshold
    if(rsi < InpRSIEntryLevel)
    {
       if(trades_today >= InpMaxTradesPerDay)

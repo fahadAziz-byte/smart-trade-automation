@@ -1,27 +1,25 @@
 #property strict
 #property script_show_inputs
 #property version   "1.00"
-#property description "RSI live-trading script for XAUUSD H1"
-#property script_show_inputs
+#property description "RSI live-trading script for XAUUSD"
 
-input string         InpSymbol                = "XAUUSD";
-input ENUM_TIMEFRAMES InpTimeframe            = PERIOD_H1;
-input int            InpRSIPeriod             = 14;
-input double         InpEntryLevel            = 46.0;
-input double         InpExitLevel             = 70.0;
-input double         InpLotSize               = 0.01;
-input int            InpStopLossPoints        = 100;
-input int            InpTakeProfitPoints      = 200;
-input int            InpMaxTradesPerDay       = 1;
-input int            InpMagicNumber           = 106492a;
-input int            InpDeviationPoints       = 10;
+input string          InpSymbol           = "XAUUSD";
+input ENUM_TIMEFRAMES InpTimeframe        = PERIOD_H1;
+input int             InpRSIPeriod        = 14;
+input double          InpEntryLevel       = 46.0;
+input double          InpExitLevel        = 70.0;
+input double          InpLotSize          = 0.01;
+input int             InpStopLossPoints   = 100;
+input int             InpTakeProfitPoints  = 200;
+input int             InpMaxTradesPerDay   = 1;
+input long            InpMagicNumber      = 106492;
+input int             InpDeviationPoints  = 10;
 
 #include <Trade/Trade.mqh>
 
 CTrade trade;
 int rsi_handle = INVALID_HANDLE;
 datetime last_bar_time = 0;
-
 int trades_today = 0;
 int current_day_of_year = -1;
 
@@ -54,8 +52,7 @@ bool ClosePositionsBySymbol(const string symbol)
 
       if(PositionSelectByTicket(ticket))
       {
-         string pos_symbol = PositionGetString(POSITION_SYMBOL);
-         if(pos_symbol == symbol)
+         if(PositionGetString(POSITION_SYMBOL) == symbol)
          {
             if(trade.PositionClose(ticket))
                closed_any = true;
@@ -90,6 +87,8 @@ double NormalizeVolumeBySymbol(const string symbol, double volume)
 bool IsNewBar(const string symbol, ENUM_TIMEFRAMES tf)
 {
    datetime t[1];
+   ArraySetAsSeries(t, true);
+
    if(CopyTime(symbol, tf, 0, 1, t) != 1)
       return false;
 
@@ -144,7 +143,7 @@ void OnStart()
 
       if(IsNewBar(symbol, InpTimeframe))
       {
-         double rsi_buffer[3];
+         double rsi_buffer[2];
          ArraySetAsSeries(rsi_buffer, true);
 
          if(CopyBuffer(rsi_handle, 0, 1, 2, rsi_buffer) == 2)

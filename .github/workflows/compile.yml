@@ -83,3 +83,11 @@ jobs:
           name: build-log
           path: MT5\MQL5\Logs\build.log
           if-no-files-found: ignore
+
+      - name: Upload compiled .ex5 artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiled-ex5
+          path: MT5\MQL5\Scripts\*.ex5
+          if-no-files-found: warn

@@ -1,7 +1,7 @@
 name: MQL5 Compile
 
 on:
-  push:
+  # Only trigger via backend API dispatch (script_name is always provided)
   workflow_dispatch:
     inputs:
       script_name:

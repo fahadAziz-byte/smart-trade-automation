@@ -5,23 +5,22 @@
 
 #include <Trade/Trade.mqh>
 
-input string InpSymbol = "XAUUSD";
-input ENUM_TIMEFRAMES InpTimeframe = PERIOD_H1;
-input int    InpRSIPeriod = 14;
-input double InpBuyRSILevel = 46.0;
-input double InpExitRSILevel = 70.0;
-input double InpLots = 0.01;
-input int    InpStopLossPoints = 100;
-input int    InpTakeProfitPoints = 200;
-input int    InpMaxTradesPerDay = 1;
-input ulong  InpMagicNumber = 480e1ed9;
-input int    InpDeviationPoints = 10;
+input string         InpSymbol            = "XAUUSD";
+input ENUM_TIMEFRAMES InpTimeframe        = PERIOD_H1;
+input int            InpRSIPeriod         = 14;
+input double         InpBuyRSILevel       = 46.0;
+input double         InpExitRSILevel      = 70.0;
+input double         InpLots              = 0.01;
+input int            InpStopLossPoints    = 100;
+input int            InpTakeProfitPoints  = 200;
+input int            InpMaxTradesPerDay    = 1;
+input ulong          InpMagicNumber       = 480123;
+input int            InpDeviationPoints   = 10;
 
 CTrade trade;
 int rsi_handle = INVALID_HANDLE;
 datetime last_bar_time = 0;
 
-// Track daily trade count
 int trades_today = 0;
 int last_day_of_year = -1;
 
@@ -30,7 +29,7 @@ int last_day_of_year = -1;
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   if(Symbol() == NULL || InpSymbol == "")
+   if(InpSymbol == "")
       return(INIT_FAILED);
 
    trade.SetExpertMagicNumber((int)InpMagicNumber);
@@ -80,7 +79,11 @@ bool HasOpenPosition()
 {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
-      if(PositionSelectByIndex(i))
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+
+      if(PositionSelectByTicket(ticket))
       {
          string pos_symbol = PositionGetString(POSITION_SYMBOL);
          long pos_magic = PositionGetInteger(POSITION_MAGIC);
@@ -97,19 +100,23 @@ bool HasOpenPosition()
 //+------------------------------------------------------------------+
 void CheckExitCondition(double rsi_value)
 {
-   if(rsi_value > InpExitRSILevel)
-   {
-      for(int i = PositionsTotal() - 1; i >= 0; i--)
-      {
-         if(PositionSelectByIndex(i))
-         {
-            string pos_symbol = PositionGetString(POSITION_SYMBOL);
-            long pos_magic = PositionGetInteger(POSITION_MAGIC);
+   if(rsi_value <= InpExitRSILevel)
+      return;
 
-            if(pos_symbol == InpSymbol && pos_magic == (long)InpMagicNumber)
-            {
-               trade.PositionClose(pos_symbol);
-            }
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+
+      if(PositionSelectByTicket(ticket))
+      {
+         string pos_symbol = PositionGetString(POSITION_SYMBOL);
+         long pos_magic = PositionGetInteger(POSITION_MAGIC);
+
+         if(pos_symbol == InpSymbol && pos_magic == (long)InpMagicNumber)
+         {
+            trade.PositionClose(pos_symbol);
          }
       }
    }
@@ -118,11 +125,11 @@ void CheckExitCondition(double rsi_value)
 //+------------------------------------------------------------------+
 //| Open BUY position                                                 |
 //+------------------------------------------------------------------+
-void OpenBuy()
+bool OpenBuy()
 {
-   double ask = 0.0, bid = 0.0;
-   if(!SymbolInfoDouble(InpSymbol, SYMBOL_ASK, ask) || !SymbolInfoDouble(InpSymbol, SYMBOL_BID, bid))
-      return;
+   double ask = 0.0;
+   if(!SymbolInfoDouble(InpSymbol, SYMBOL_ASK, ask))
+      return false;
 
    double point = SymbolInfoDouble(InpSymbol, SYMBOL_POINT);
    int digits = (int)SymbolInfoInteger(InpSymbol, SYMBOL_DIGITS);
@@ -135,7 +142,11 @@ void OpenBuy()
    if(InpTakeProfitPoints > 0)
       tp = NormalizeDouble(ask + InpTakeProfitPoints * point, digits);
 
-   trade.Buy(InpLots, InpSymbol, ask, sl, tp, "RSI BUY");
+   bool ok = trade.Buy(InpLots, InpSymbol, 0.0, sl, tp, "RSI BUY");
+   if(!ok)
+      Print("Buy failed. Retcode: ", trade.ResultRetcode(), " Description: ", trade.ResultRetcodeDescription());
+
+   return ok;
 }
 
 //+------------------------------------------------------------------+
@@ -148,16 +159,15 @@ void OnTick()
 
    ResetDailyCounterIfNeeded();
 
-   // Run logic only on a new bar of the selected timeframe
    datetime current_bar_time = iTime(InpSymbol, InpTimeframe, 0);
    if(current_bar_time == 0 || current_bar_time == last_bar_time)
       return;
    last_bar_time = current_bar_time;
 
-   double rsi_buffer[2];
+   double rsi_buffer[1];
    ArraySetAsSeries(rsi_buffer, true);
 
-   if(CopyBuffer(rsi_handle, 0, 0, 2, rsi_buffer) < 2)
+   if(CopyBuffer(rsi_handle, 0, 0, 1, rsi_buffer) < 1)
    {
       Print("Failed to copy RSI data. Error: ", GetLastError());
       return;
@@ -165,16 +175,13 @@ void OnTick()
 
    double rsi_current = rsi_buffer[0];
 
-   // Exit condition first
    CheckExitCondition(rsi_current);
 
-   // Entry condition: RSI < 46 and max trades/day not exceeded
    if(rsi_current < InpBuyRSILevel && trades_today < InpMaxTradesPerDay)
    {
       if(!HasOpenPosition())
       {
-         OpenBuy();
-         if(trade.ResultRetcode() == TRADE_RETCODE_DONE)
+         if(OpenBuy())
             trades_today++;
       }
    }
